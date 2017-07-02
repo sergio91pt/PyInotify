@@ -1,4 +1,4 @@
-#!/usr/bin/env python2.7
+#!/usr/bin/env python3.5
 
 import os.path
 import sys
@@ -15,14 +15,8 @@ _DEFAULT_LOG_FORMAT = '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 _LOGGER = logging.getLogger(__name__)
 
 def _configure_logging():
-    _LOGGER.setLevel(logging.DEBUG)
+    logging.basicConfig(format=_DEFAULT_LOG_FORMAT, level=logging.DEBUG)
 
-    ch = logging.StreamHandler()
-
-    formatter = logging.Formatter(_DEFAULT_LOG_FORMAT)
-    ch.setFormatter(formatter)
-
-    _LOGGER.addHandler(ch)
 
 def _main():
 #    paths = [
@@ -30,9 +24,10 @@ def _main():
 #    ]
 #    
 #    i = Inotify(paths=paths)
-    i = inotify.adapters.Inotify()
+#    i = inotify.adapters.Inotify()
 
-    i.add_watch('/tmp')
+#    i.add_watch(b'/tmp')
+    i = inotify.adapters.InotifyTree(b'/tmp')
 
     try:
         for event in i.event_gen():
@@ -43,7 +38,8 @@ def _main():
                              header.wd, header.mask, header.cookie, header.len, type_names, 
                              filename)
     finally:
-        i.remove_watch('/tmp')
+        _LOGGER.debug('finally')
+#        i.remove_watch('/tmp')
 
 if __name__ == '__main__':
     _configure_logging()

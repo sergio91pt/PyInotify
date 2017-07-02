@@ -3,6 +3,7 @@ import select
 import os
 import struct
 import collections
+import bisect
 
 from errno import EINTR
 
@@ -35,6 +36,7 @@ class Inotify(object):
     def __init__(self, paths=[], block_duration_s=_DEFAULT_EPOLL_BLOCK_DURATION_S):
         self.__block_duration = block_duration_s
         self.__watches = {}
+        self.__watches_l = collections.deque()
         self.__watches_r = {}
         self.__buffer = b''
 
@@ -67,6 +69,10 @@ class Inotify(object):
         wd = inotify.calls.inotify_add_watch(self.__inotify_fd, path, mask)
         _LOGGER.debug("Added watch (%d): [%s]", wd, path)
 
+        if path not in self.__watches:
+            idx = bisect.bisect(self.__watches_l, path)
+            self.__watches_l.insert(idx, path)
+
         self.__watches[path] = wd
         self.__watches_r[wd] = path
 
@@ -80,6 +86,9 @@ class Inotify(object):
         if wd is None:
             return
 
+        idx = bisect.bisect_left(self.__watches_l, path)
+        del self.__watches_l[idx]
+
         del self.__watches[path]
         del self.__watches_r[wd]
 
@@ -88,6 +97,31 @@ class Inotify(object):
                           wd, path)
 
             inotify.calls.inotify_rm_watch(self.__inotify_fd, wd)
+
+    def remove_watch_tree(self, tree, superficial=False):
+        if self.__watches.get(tree) is None:
+            return
+
+        count = len(self.__watches_l)
+        idx = bisect.bisect_left(self.__watches_l, tree)
+        prefix = tree + b'/'
+
+        while count > idx:
+            path = self.__watches_l[idx]
+            if not path == tree and not path.startswith(prefix):
+                break
+            count -= 1
+            wd = self.__watches.get(path)
+
+            del self.__watches_l[idx]
+            del self.__watches[path]
+            del self.__watches_r[wd]
+
+            if superficial is False:
+                _LOGGER.debug("Removing watch for watch-handle (%d): [%s]",
+                              wd, path)
+
+                inotify.calls.inotify_rm_watch(self.__inotify_fd, wd)
 
     def __get_event_names(self, event_type):
         names = []
@@ -192,7 +226,9 @@ class BaseTree(object):
         self._mask = mask | \
                         inotify.constants.IN_ISDIR | \
                         inotify.constants.IN_CREATE | \
-                        inotify.constants.IN_DELETE
+                        inotify.constants.IN_DELETE | \
+                        inotify.constants.IN_MOVED_FROM | \
+                        inotify.constants.IN_MOVED_TO
 
         self._i = Inotify(block_duration_s=block_duration_s)
 
@@ -214,6 +250,12 @@ class BaseTree(object):
                                       "being recursive): [%s]", full_path)
 
                         self._load_tree(full_path)
+                    elif header.mask & inotify.constants.IN_MOVED_TO:
+                        _LOGGER.debug("A directory has been moved to. We're "
+                                      "adding a watch on it (because we're "
+                                      "being recursive): [%s]", full_path)
+
+                        self._load_tree(full_path)
                     elif header.mask & inotify.constants.IN_DELETE:
                         _LOGGER.debug("A directory has been removed. We're "
                                       "being recursive, but it would have "
@@ -222,6 +264,15 @@ class BaseTree(object):
 
                         # The watch would've already been cleaned-up internally.
                         self._i.remove_watch(full_path, superficial=True)
+                    elif header.mask & inotify.constants.IN_MOVED_FROM:
+                        _LOGGER.debug("A directory has been moved from. We're "
+                                      "being recursive, but it would have "
+                                      "automatically been deregistered: [%s]",
+                                      full_path)
+
+                        # MOVED_FROM event does not trigger for sub-directories.
+                        # The watch would've already been cleaned-up internally.
+                        self._i.remove_watch_tree(full_path, superficial=False)
 
             yield event
 
