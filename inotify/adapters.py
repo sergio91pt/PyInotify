@@ -66,7 +66,11 @@ class Inotify(object):
     def add_watch(self, path, mask=inotify.constants.IN_ALL_EVENTS):
         _LOGGER.debug("Adding watch: [%s]", path)
 
-        wd = inotify.calls.inotify_add_watch(self.__inotify_fd, path, mask)
+        try:
+            wd = inotify.calls.inotify_add_watch(self.__inotify_fd, path, mask)
+        except inotify.calls.InotifyError as e:
+            e.args = (e.args[0] + " path=(%s)" % (path,),)
+            raise
         _LOGGER.debug("Added watch (%d): [%s]", wd, path)
 
         if path not in self.__watches:
